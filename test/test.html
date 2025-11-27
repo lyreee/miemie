@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>消息接收系统测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            height: 90vh;
+        }
+        .panel {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .panel h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+            background: #f8f9fa;
+        }
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #666;
+        }
+        .message-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .message-content {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .timestamp {
+            color: #888;
+            font-size: 12px;
+        }
+        .priority-high {
+            border-left-color: #dc3545;
+        }
+        .priority-normal {
+            border-left-color: #28a745;
+        }
+        .priority-low {
+            border-left-color: #ffc107;
+        }
+    </style>
+</head>
+<body>
+    <h1>消息接收系统测试</h1>
+
+    <div class="container">
+        <!-- 发送消息面板 -->
+        <div class="panel">
+            <h2>发送消息</h2>
+
+            <!-- 用户ID设置 -->
+            <div class="form-group">
+                <label for="userId">用户ID:</label>
+                <input type="text" id="userId" name="userId" placeholder="user1" value="user1" required>
+                <button type="button" onclick="switchUser()">切换用户</button>
+                <small>当前用户: <span id="currentUser">user1</span></small>
+            </div>
+
+            <form id="messageForm">
+                <div class="form-group">
+                    <label for="channelId">频道ID (留空使用默认频道):</label>
+                    <input type="text" id="channelId" name="channelId" placeholder="default">
+                </div>
+
+                <div class="form-group">
+                    <label for="title">消息标题:</label>
+                    <input type="text" id="title" name="title" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="content">消息内容:</label>
+                    <textarea id="content" name="content" rows="4" required></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="messageType">消息类型:</label>
+                    <select id="messageType" name="messageType">
+                        <option value="text">文本消息</option>
+                        <option value="notification">通知消息</option>
+                        <option value="alert">告警消息</option>
+                        <option value="system">系统消息</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="priority">优先级 (1-10, 1最高):</label>
+                    <input type="number" id="priority" name="priority" min="1" max="10" value="5">
+                </div>
+
+                <div class="form-group">
+                    <label for="sender">发送者:</label>
+                    <input type="text" id="sender" name="sender" placeholder="anonymous">
+                </div>
+
+                <button type="submit">发送消息</button>
+            </form>
+
+            <div class="form-group" style="margin-top: 20px;">
+                <button onclick="sendBatchMessages()">批量发送测试消息</button>
+                <button onclick="loadMessages()">刷新消息列表</button>
+            </div>
+
+            <div id="sendStatus" class="status disconnected"></div>
+        </div>
+
+        <!-- 接收消息面板 -->
+        <div class="panel">
+            <h2>实时消息接收</h2>
+
+            <div id="wsStatus" class="status disconnected">未连接</div>
+
+            <div class="messages" id="messages">
+                <!-- 消息将显示在这里 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let messageCount = 0;
+        let currentUser = 'user1';
+
+        // 初始化WebSocket连接
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws?user_id=${encodeURIComponent(currentUser)}`;
+
+            // 如果已有连接，先关闭
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                updateWSStatus('已连接', true);
+                console.log('WebSocket连接已建立');
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'message') {
+                        displayMessage(data.data);
+                    }
+                } catch (e) {
+                    console.error('解析消息失败:', e);
+                }
+            };
+
+            ws.onclose = function() {
+                updateWSStatus('连接断开', false);
+                console.log('WebSocket连接已断开');
+                // 5秒后重连
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            ws.onerror = function(error) {
+                updateWSStatus('连接错误', false);
+                console.error('WebSocket错误:', error);
+            };
+        }
+
+        function updateWSStatus(text, connected) {
+            const status = document.getElementById('wsStatus');
+            status.textContent = text;
+            status.className = `status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            messageCount++;
+
+            const priorityClass = message.priority <= 3 ? 'priority-high' :
+                                 message.priority <= 7 ? 'priority-normal' : 'priority-low';
+
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${priorityClass}`;
+            messageEl.innerHTML = `
+                <div class="message-header">
+                    <span><strong>${message.sender || 'Anonymous'}</strong> in ${message.channel_id} (User: ${message.user_id})</span>
+                    <span class="timestamp">${new Date(message.created_at).toLocaleString()}</span>
+                </div>
+                <div class="message-title">${message.title}</div>
+                <div class="message-content">${message.content}</div>
+                <div class="message-header">
+                    <span>Type: ${message.message_type} | Priority: ${message.priority}</span>
+                    <span>ID: ${message.id.substring(0, 8)}...</span>
+                </div>
+            `;
+
+            // 插入到顶部
+            messagesDiv.insertBefore(messageEl, messagesDiv.firstChild);
+
+            // 限制显示的消息数量
+            while (messagesDiv.children.length > 100) {
+                messagesDiv.removeChild(messagesDiv.lastChild);
+            }
+        }
+
+        // 切换用户
+        function switchUser() {
+            const userIdInput = document.getElementById('userId');
+            const newUserId = userIdInput.value.trim();
+
+            if (newUserId && newUserId !== currentUser) {
+                currentUser = newUserId;
+                document.getElementById('currentUser').textContent = currentUser;
+
+                // 重新连接WebSocket以使用新用户ID
+                connectWebSocket();
+
+                // 清空消息显示
+                document.getElementById('messages').innerHTML = '';
+                messageCount = 0;
+
+                // 重新加载消息
+                loadMessages();
+
+                updateSendStatus(`已切换到用户: ${currentUser}`, true);
+            }
+        }
+
+        // 发送单条消息
+        document.getElementById('messageForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+            const messageData = {
+                channel_id: formData.get('channelId') || 'default',
+                title: formData.get('title'),
+                content: formData.get('content'),
+                message_type: formData.get('messageType'),
+                priority: parseInt(formData.get('priority')),
+                sender: formData.get('sender') || 'anonymous'
+            };
+
+            try {
+                const response = await fetch('/api/v3/messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-ID': currentUser,
+                    },
+                    body: JSON.stringify(messageData)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    updateSendStatus('消息发送成功', true);
+                    e.target.reset();
+                } else {
+                    updateSendStatus(`发送失败: ${result.message}`, false);
+                }
+            } catch (error) {
+                updateSendStatus(`网络错误: ${error.message}`, false);
+            }
+        });
+
+        // 批量发送测试消息
+        async function sendBatchMessages() {
+            const messages = [
+                {
+                    channel_id: 'default',
+                    title: '批量消息 1',
+                    content: '这是第一条批量测试消息',
+                    message_type: 'notification',
+                    priority: 5,
+                    sender: 'batch_tester'
+                },
+                {
+                    channel_id: 'default',
+                    title: '批量消息 2',
+                    content: '这是第二条批量测试消息，优先级较高',
+                    message_type: 'alert',
+                    priority: 2,
+                    sender: 'batch_tester'
+                },
+                {
+                    channel_id: 'default',
+                    title: '批量消息 3',
+                    content: '这是第三条批量测试消息，优先级较低',
+                    message_type: 'text',
+                    priority: 8,
+                    sender: 'batch_tester'
+                }
+            ];
+
+            try {
+                const response = await fetch('/api/v3/messages/batch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'User-ID': currentUser,
+                    },
+                    body: JSON.stringify({ messages })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    updateSendStatus(`批量发送成功: ${result.data.count} 条消息`, true);
+                } else {
+                    updateSendStatus(`批量发送失败: ${result.message}`, false);
+                }
+            } catch (error) {
+                updateSendStatus(`网络错误: ${error.message}`, false);
+            }
+        }
+
+        // 加载历史消息
+        async function loadMessages() {
+            try {
+                const response = await fetch('/api/v3/messages?limit=20', {
+                    headers: {
+                        'User-ID': currentUser,
+                    }
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    const messagesDiv = document.getElementById('messages');
+                    messagesDiv.innerHTML = '';
+
+                    // 倒序显示，最新的在上面
+                    result.data.messages.reverse().forEach(message => {
+                        displayMessage(message);
+                    });
+
+                    updateSendStatus(`加载了 ${result.data.messages.length} 条历史消息`, true);
+                } else {
+                    updateSendStatus(`加载失败: ${result.message}`, false);
+                }
+            } catch (error) {
+                updateSendStatus(`网络错误: ${error.message}`, false);
+            }
+        }
+
+        function updateSendStatus(message, success) {
+            const status = document.getElementById('sendStatus');
+            status.textContent = message;
+            status.className = `status ${success ? 'connected' : 'disconnected'}`;
+
+            // 3秒后清除状态
+            setTimeout(() => {
+                status.textContent = '';
+            }, 3000);
+        }
+
+        // 页面加载完成后初始化
+        window.addEventListener('load', function() {
+            connectWebSocket();
+            loadMessages();
+        });
+    </script>
+</body>
+</html>
